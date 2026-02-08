@@ -1,0 +1,17 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@db/*": ["./src/db/*"],
+      "@capture/*": ["./src/capture/*"],
+      "@engine/*": ["./src/engine/*"],
+      "@ai/*": ["./src/ai/*"],
+      "@privacy/*": ["./src/privacy/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@dashboard/*": ["./src/dashboard/*"]
+    }
+  }
+}
