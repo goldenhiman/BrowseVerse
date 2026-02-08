@@ -6,7 +6,7 @@ export default defineConfig({
   outDir: 'output',
   modules: ['@wxt-dev/module-react'],
   manifest: {
-    name: 'Browsing Knowledge OS',
+    name: 'BrowseVerse - Browsing Knowledge OS',
     description: 'A local-first personal knowledge system for your browsing',
     version: '0.1.0',
     permissions: ['tabs', 'activeTab', 'storage', 'idle', 'webNavigation'],

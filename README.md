@@ -1,9 +1,10 @@
-# Browsing Knowledge OS
+# BrowseVerse - Browsing Knowledge OS
 
 A local-first Chrome extension that passively observes your browsing behavior and transforms it into a structured, explorable personal knowledge system.
 
 ## Features
 
+- **BrowseVerse**: Your personal Browsing Knowledge OS — capture, organize, and explore everything you learn on the web
 - **Passive Capture**: Automatically tracks pages, dwell time, and sessions
 - **Knowledge Engine**: Deterministic topic inference, category building, and relationship mapping
 - **Knowledge Boxes**: Goal-oriented tracking spaces for research and learning

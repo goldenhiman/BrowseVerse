@@ -43,7 +43,7 @@ export function Sidebar() {
         </div>
         {!collapsed && (
           <span className="text-sm font-semibold text-surface-900">
-            Knowledge OS
+            BrowseVerse
           </span>
         )}
       </div>

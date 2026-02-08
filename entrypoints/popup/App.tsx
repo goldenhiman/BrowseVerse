@@ -36,7 +36,7 @@ export default function App() {
           <Brain className="h-3.5 w-3.5 text-white" />
         </div>
         <div className="flex-1">
-          <h1 className="text-sm font-semibold text-gray-900">Knowledge OS</h1>
+          <h1 className="text-sm font-semibold text-gray-900">BrowseVerse</h1>
           <p className="text-[10px] text-gray-400">Personal knowledge system</p>
         </div>
         {stats?.active_session && (
