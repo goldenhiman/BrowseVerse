@@ -1,8 +1,15 @@
 // ============================================================
-// Data Export - JSON and CSV export
+// Data Export & Import - JSON and CSV
 // ============================================================
 
 import { db } from '../db/index';
+import {
+  SETTINGS_STORAGE_KEY,
+  AI_LAST_RUN_KEY,
+  LAST_AUTO_BACKUP_KEY,
+} from '../shared/constants';
+import { isEncryptedExport } from './crypto';
+import { invalidateCache } from './exclusions';
 import type {
   Page,
   Session,
@@ -12,11 +19,23 @@ import type {
   Concept,
   Relationship,
   KnowledgeBox,
+  DocumentChunk,
+  Nebula,
+  NebulaRun,
+  Artifact,
+  AppSettings,
 } from '../shared/types';
 
-interface ExportData {
+const PRESETS_VERSION_KEY = 'bko_exclusions_presets_version';
+
+// ============================================================
+// Export Data Shape
+// ============================================================
+
+export interface ExportData {
   version: string;
   exported_at: string;
+  // IndexedDB tables
   pages: Page[];
   sessions: Session[];
   highlights: Highlight[];
@@ -25,13 +44,219 @@ interface ExportData {
   concepts: Concept[];
   relationships: Relationship[];
   knowledgeBoxes: KnowledgeBox[];
+  documentChunks: DocumentChunk[];
+  nebulas: Nebula[];
+  nebulaRuns: NebulaRun[];
+  artifacts: Artifact[];
+  // Browser storage
+  browserStorage: {
+    settings?: AppSettings;
+    exclusionsPresetsVersion?: number;
+    aiLastRun?: number;
+    lastAutoBackup?: number;
+  };
 }
 
-/** Export all data as JSON */
+export const EXPORT_VERSION = '2.1';
+
+// ============================================================
+// Validation
+// ============================================================
+
+export interface ValidationResult {
+  valid: boolean;
+  error?: string;
+  preview?: ImportPreview;
+}
+
+export interface ImportPreview {
+  version: string;
+  exported_at: string;
+  counts: Record<string, number>;
+  hasSettings: boolean;
+  encrypted: boolean;
+}
+
+const TABLE_KEYS: (keyof ExportData)[] = [
+  'pages',
+  'sessions',
+  'highlights',
+  'topics',
+  'categories',
+  'concepts',
+  'relationships',
+  'knowledgeBoxes',
+  'documentChunks',
+  'nebulas',
+  'nebulaRuns',
+  'artifacts',
+];
+
+/**
+ * Validate an export file and return a preview of what it contains.
+ *
+ * If the file is encrypted, returns `valid: false` with `error` set to
+ * `'ENCRYPTED'` — the caller should prompt for a password, decrypt,
+ * then re-validate the plaintext result.
+ */
+export function validateExportFile(jsonString: string): ValidationResult {
+  // Detect encrypted files before full parsing
+  if (isEncryptedExport(jsonString)) {
+    return {
+      valid: false,
+      error: 'ENCRYPTED',
+      preview: { version: '', exported_at: '', counts: {}, hasSettings: false, encrypted: true },
+    };
+  }
+
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(jsonString);
+  } catch {
+    return { valid: false, error: 'Invalid JSON — the file could not be parsed.' };
+  }
+
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return { valid: false, error: 'Invalid format — expected a JSON object.' };
+  }
+
+  if (!data.version || typeof data.version !== 'string') {
+    return { valid: false, error: 'Missing or invalid "version" field.' };
+  }
+
+  if (!data.exported_at || typeof data.exported_at !== 'string') {
+    return { valid: false, error: 'Missing or invalid "exported_at" field.' };
+  }
+
+  // v1.0 exports have a subset of tables; v2.0+ has all. Both are accepted.
+  const v1RequiredTables = ['pages', 'sessions', 'highlights', 'topics', 'categories', 'concepts', 'relationships', 'knowledgeBoxes'];
+  for (const key of v1RequiredTables) {
+    if (!Array.isArray(data[key])) {
+      return { valid: false, error: `Missing or invalid table "${key}" — expected an array.` };
+    }
+  }
+
+  const counts: Record<string, number> = {};
+  for (const key of TABLE_KEYS) {
+    const arr = data[key];
+    counts[key] = Array.isArray(arr) ? arr.length : 0;
+  }
+
+  const browserStorage = data.browserStorage as Record<string, unknown> | undefined;
+  const hasSettings = !!(browserStorage && typeof browserStorage === 'object' && browserStorage.settings);
+
+  return {
+    valid: true,
+    preview: {
+      version: data.version as string,
+      exported_at: data.exported_at as string,
+      counts,
+      hasSettings,
+      encrypted: false,
+    },
+  };
+}
+
+// ============================================================
+// Import
+// ============================================================
+
+export interface ImportResult {
+  success: boolean;
+  error?: string;
+  counts: Record<string, number>;
+}
+
+/** Import all data from a JSON export, replacing existing data */
+export async function importFromJSON(jsonString: string): Promise<ImportResult> {
+  const validation = validateExportFile(jsonString);
+  if (!validation.valid) {
+    return { success: false, error: validation.error, counts: {} };
+  }
+
+  const data = JSON.parse(jsonString) as Record<string, unknown>;
+  const counts: Record<string, number> = {};
+
+  try {
+    // Clear and bulk-insert all IndexedDB tables inside a transaction
+    await db.transaction('rw', db.tables, async () => {
+      // Clear every table
+      for (const table of db.tables) {
+        await table.clear();
+      }
+
+      // Bulk-insert each table from the export
+      const tableMap: Record<string, typeof db.pages> = {
+        pages: db.pages,
+        sessions: db.sessions,
+        highlights: db.highlights,
+        topics: db.topics,
+        categories: db.categories,
+        concepts: db.concepts,
+        relationships: db.relationships,
+        knowledgeBoxes: db.knowledgeBoxes,
+        documentChunks: db.documentChunks,
+        nebulas: db.nebulas,
+        nebulaRuns: db.nebulaRuns,
+        artifacts: db.artifacts,
+      };
+
+      for (const [key, table] of Object.entries(tableMap)) {
+        const arr = data[key];
+        if (Array.isArray(arr) && arr.length > 0) {
+          await table.bulkAdd(arr);
+          counts[key] = arr.length;
+        } else {
+          counts[key] = 0;
+        }
+      }
+    });
+
+    // Restore browser.storage data
+    const browserStorage = data.browserStorage as Record<string, unknown> | undefined;
+    if (browserStorage && typeof browserStorage === 'object') {
+      if (browserStorage.settings) {
+        await browser.storage.local.set({ [SETTINGS_STORAGE_KEY]: browserStorage.settings });
+      }
+      if (typeof browserStorage.exclusionsPresetsVersion === 'number') {
+        await browser.storage.local.set({ [PRESETS_VERSION_KEY]: browserStorage.exclusionsPresetsVersion });
+      }
+      if (typeof browserStorage.aiLastRun === 'number') {
+        await browser.storage.local.set({ [AI_LAST_RUN_KEY]: browserStorage.aiLastRun });
+      }
+      if (typeof browserStorage.lastAutoBackup === 'number') {
+        await browser.storage.local.set({ [LAST_AUTO_BACKUP_KEY]: browserStorage.lastAutoBackup });
+      }
+    }
+
+    // Invalidate cached settings so subsequent reads pick up imported values
+    invalidateCache();
+
+    return { success: true, counts };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown import error';
+    return { success: false, error: message, counts };
+  }
+}
+
+// ============================================================
+// Export
+// ============================================================
+
+/** Export all data as JSON (all IndexedDB tables + browser.storage) */
 export async function exportAsJSON(): Promise<string> {
+  // Fetch browser.storage values
+  const storageResult = await browser.storage.local.get([
+    SETTINGS_STORAGE_KEY,
+    PRESETS_VERSION_KEY,
+    AI_LAST_RUN_KEY,
+    LAST_AUTO_BACKUP_KEY,
+  ]);
+
   const data: ExportData = {
-    version: '1.0',
+    version: EXPORT_VERSION,
     exported_at: new Date().toISOString(),
+    // IndexedDB tables
     pages: await db.pages.toArray(),
     sessions: await db.sessions.toArray(),
     highlights: await db.highlights.toArray(),
@@ -40,7 +265,19 @@ export async function exportAsJSON(): Promise<string> {
     concepts: await db.concepts.toArray(),
     relationships: await db.relationships.toArray(),
     knowledgeBoxes: await db.knowledgeBoxes.toArray(),
+    documentChunks: await db.documentChunks.toArray(),
+    nebulas: await db.nebulas.toArray(),
+    nebulaRuns: await db.nebulaRuns.toArray(),
+    artifacts: await db.artifacts.toArray(),
+    // Browser storage
+    browserStorage: {
+      settings: storageResult[SETTINGS_STORAGE_KEY] ?? undefined,
+      exclusionsPresetsVersion: storageResult[PRESETS_VERSION_KEY] ?? undefined,
+      aiLastRun: storageResult[AI_LAST_RUN_KEY] ?? undefined,
+      lastAutoBackup: storageResult[LAST_AUTO_BACKUP_KEY] ?? undefined,
+    },
   };
+
   return JSON.stringify(data, null, 2);
 }
 

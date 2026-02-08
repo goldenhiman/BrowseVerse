@@ -141,12 +141,18 @@ export interface AppSettings {
   excluded_url_patterns: string[];
   /** Preset category IDs that are enabled (e.g. email, banking) */
   excluded_preset_ids?: string[];
+  /** When true, extension stops collecting browsing data (pages, highlights, metadata) */
+  extension_paused?: boolean;
   session_idle_threshold_ms: number; // default 30 min = 1800000
   dashboard_password?: string;
   accent_color: string;
   ai_enabled: boolean;
   /** Prioritized list of AI providers. First is primary; on rate limit or failure, falls back to next. */
   ai_providers?: AIProviderConfig[];
+  /** Whether daily auto-backup is enabled */
+  auto_backup_enabled?: boolean;
+  /** Password for encrypting exports (stored for auto-backup use; empty = no encryption) */
+  backup_encryption_password?: string;
   /** @deprecated Use ai_providers. Kept for migration. */
   ai_provider?: AIProviderType;
   /** @deprecated Use ai_providers. Kept for migration. */

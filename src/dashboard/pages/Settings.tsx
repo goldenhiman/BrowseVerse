@@ -1,6 +1,15 @@
+/* eslint-disable @typescript-eslint/no-unnecessary-condition */
 import React, { useState, useEffect, useCallback } from 'react';
+
+// File System Access API type augmentation (not yet in all TS libs)
+declare global {
+  interface Window {
+    showDirectoryPicker(options?: { mode?: 'read' | 'readwrite' }): Promise<FileSystemDirectoryHandle>;
+  }
+}
 import { Header } from '../components/layout/Header';
 import { Card, CardHeader, CardTitle } from '../components/shared/Card';
+import { Switch } from '../components/shared/Switch';
 import { Button } from '../components/shared/Button';
 import { Input } from '../components/shared/Input';
 import { Badge } from '../components/shared/Badge';
@@ -10,19 +19,24 @@ import {
 } from '../../privacy/exclusions';
 import { PRESET_EXCLUSIONS } from '../../shared/preset-exclusions';
 import { ExclusionManageModal } from '../components/ExclusionManageModal';
+import { AutoBackupSetupModal } from '../components/settings/AutoBackupSetupModal';
+import { ChangeEncryptionPasswordModal } from '../components/settings/ChangeEncryptionPasswordModal';
+import { ExportModal } from '../components/settings/ExportModal';
+import { ImportModal } from '../components/settings/ImportModal';
 import { deleteAllData, deleteByDomain } from '../../privacy/deletion';
 import {
-  exportAsJSON,
-  exportPagesAsCSV,
-  exportHighlightsAsCSV,
-  downloadFile,
-} from '../../privacy/export';
+  storeBackupDirHandle,
+  getBackupDirName,
+  clearBackupDirHandle,
+} from '../../privacy/auto-backup';
+import { LAST_AUTO_BACKUP_KEY } from '../../shared/constants';
 import { testAIConnection, testProviderConfig, clearAICache } from '../../ai/manager';
 import type { AppSettings, AIProviderType, AIProviderConfig } from '../../shared/types';
 import { AI_PROVIDER_MODELS } from '../../shared/types';
 import {
   Shield,
   Download,
+  Upload,
   Trash2,
   Key,
   Palette,
@@ -36,6 +50,10 @@ import {
   ChevronUp,
   Plus,
   X,
+  FolderOpen,
+  HardDrive,
+  Clock,
+  ShieldCheck,
 } from 'lucide-react';
 
 export default function Settings() {
@@ -49,8 +67,25 @@ export default function Settings() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [testingProviderIndex, setTestingProviderIndex] = useState<number | null>(null);
 
+  // Export/Import modal state
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  // Auto-backup state
+  const [backupDirName, setBackupDirName] = useState<string | null>(null);
+  const [lastAutoBackup, setLastAutoBackup] = useState<number | null>(null);
+  const [showAutoBackupSetupModal, setShowAutoBackupSetupModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+
+
   useEffect(() => {
     loadSettings().then((s) => setSettings(s));
+    // Load backup directory name and last-backup timestamp
+    getBackupDirName().then(setBackupDirName);
+    browser.storage.local.get(LAST_AUTO_BACKUP_KEY).then((r) => {
+      const val = r[LAST_AUTO_BACKUP_KEY];
+      setLastAutoBackup(typeof val === 'number' ? val : null);
+    });
   }, []);
 
   // Auto-check connection when AI is enabled and has providers
@@ -87,19 +122,60 @@ export default function Settings() {
     clearAICache();
   };
 
-  const handleExportJSON = async () => {
-    const json = await exportAsJSON();
-    downloadFile(json, `knowledge-os-export-${Date.now()}.json`, 'application/json');
+  const handleImportComplete = async () => {
+    const freshSettings = await loadSettings();
+    setSettings(freshSettings);
   };
 
-  const handleExportPagesCSV = async () => {
-    const csv = await exportPagesAsCSV();
-    downloadFile(csv, `knowledge-os-pages-${Date.now()}.csv`, 'text/csv');
+  const handleChooseBackupFolder = async () => {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await storeBackupDirHandle(handle);
+      setBackupDirName(handle.name);
+    } catch {
+      // User cancelled the picker — do nothing
+    }
   };
 
-  const handleExportHighlightsCSV = async () => {
-    const csv = await exportHighlightsAsCSV();
-    downloadFile(csv, `knowledge-os-highlights-${Date.now()}.csv`, 'text/csv');
+  const handleClearBackupFolder = async () => {
+    await clearBackupDirHandle();
+    setBackupDirName(null);
+  };
+
+  const autoBackupConfigured = !!(settings?.auto_backup_enabled && backupDirName);
+
+  const handleAutoBackupToggle = async (enabled: boolean) => {
+    if (!settings) return;
+    if (enabled) {
+      if (backupDirName) {
+        await updateSetting('auto_backup_enabled', true);
+      } else {
+        setShowAutoBackupSetupModal(true);
+      }
+    } else {
+      await updateSetting('auto_backup_enabled', false);
+    }
+  };
+
+  const handleAutoBackupSetupComplete = async (data: {
+    folderHandle: FileSystemDirectoryHandle;
+    encryptionPassword?: string;
+  }) => {
+    await storeBackupDirHandle(data.folderHandle);
+    setBackupDirName(data.folderHandle.name);
+    await updateSetting('backup_encryption_password', data.encryptionPassword);
+    await updateSetting('auto_backup_enabled', true);
+  };
+
+  const handleChangeEncryptionPassword = async (
+    currentPassword: string,
+    newPassword: string,
+  ) => {
+    if (!settings?.backup_encryption_password) return;
+    if (currentPassword !== settings.backup_encryption_password) {
+      throw new Error('Current password is incorrect.');
+    }
+    await updateSetting('backup_encryption_password', newPassword);
   };
 
   const handleDeleteAll = async () => {
@@ -194,10 +270,10 @@ export default function Settings() {
   }
 
   return (
-    <div>
+    <div className="m-auto">
       <Header title="Settings" subtitle="Privacy, data, and preferences" />
 
-      <div className="p-6 max-w-3xl space-y-6">
+      <div className="p-6 max-w-3xl space-y-6 m-auto">
         {/* Domain Exclusions */}
         <Card>
           <CardHeader>
@@ -579,31 +655,127 @@ export default function Settings() {
           </div>
         </Card>
 
-        {/* Export */}
+        {/* Auto-Backup & Encryption */}
+        <Card>
+          <CardHeader>
+            <div className="flex-1 min-w-0">
+              <CardTitle>
+                <span className="flex items-center gap-2">
+                  <HardDrive className="h-4 w-4 text-emerald-500" />
+                  Auto-Backup &amp; Encryption
+                </span>
+              </CardTitle>
+              <p className="text-xs text-surface-500 mt-1">
+                Automatically save a daily backup to a folder on your computer. Set an encryption
+                password to protect all exports (manual and automatic).
+              </p>
+            </div>
+            <label className="shrink-0 flex items-center gap-2 cursor-pointer select-none ml-4">
+              <Switch
+                checked={!!settings.auto_backup_enabled}
+                onCheckedChange={handleAutoBackupToggle}
+              />
+              <span className="text-sm text-surface-700">Enable</span>
+            </label>
+          </CardHeader>
+
+          {autoBackupConfigured && (
+            <div className="space-y-4 pt-2 border-t border-surface-200">
+              <div>
+                <label className="text-xs font-medium text-surface-600 mb-1.5 block">
+                  Backup Folder
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 rounded-lg bg-surface-50 border border-surface-200 px-3 py-1.5 flex-1 min-w-0">
+                    <FolderOpen className="h-3.5 w-3.5 text-surface-500 shrink-0" />
+                    <span className="text-sm text-surface-700 truncate">{backupDirName}</span>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={handleChooseBackupFolder}>
+                    Change
+                  </Button>
+                </div>
+              </div>
+
+              {settings.backup_encryption_password && (
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-emerald-50 text-emerald-700 flex items-center gap-1">
+                    <ShieldCheck className="h-3 w-3" />
+                    Encrypted
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowChangePasswordModal(true)}
+                  >
+                    Change password
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 text-xs text-surface-500">
+                <Clock className="h-3.5 w-3.5" />
+                <span>
+                  Last auto-backup:{' '}
+                  {lastAutoBackup ? (
+                    <strong className="text-surface-700">
+                      {new Date(lastAutoBackup).toLocaleString()}
+                    </strong>
+                  ) : (
+                    'Never'
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <AutoBackupSetupModal
+          isOpen={showAutoBackupSetupModal}
+          onClose={() => setShowAutoBackupSetupModal(false)}
+          onComplete={handleAutoBackupSetupComplete}
+        />
+
+        <ChangeEncryptionPasswordModal
+          isOpen={showChangePasswordModal}
+          onClose={() => setShowChangePasswordModal(false)}
+          onSuccess={() => {}}
+          onUpdatePassword={handleChangeEncryptionPassword}
+        />
+
+        {/* Export & Import */}
         <Card>
           <CardHeader>
             <CardTitle>
               <span className="flex items-center gap-2">
                 <Download className="h-4 w-4 text-blue-500" />
-                Export Data
+                Export &amp; Import Data
               </span>
             </CardTitle>
           </CardHeader>
-          <p className="text-xs text-surface-500 mb-3">
-            Export your data in various formats. Your data is always yours.
+          <p className="text-xs text-surface-500 mb-4">
+            Export your data in various formats, or import a previous backup to restore everything.
+            Your data is always yours.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={handleExportJSON}>
-              <Download className="h-3 w-3" /> Export All (JSON)
+            <Button variant="secondary" size="sm" onClick={() => setShowExportModal(true)}>
+              <Download className="h-3 w-3" /> Export
             </Button>
-            <Button variant="secondary" size="sm" onClick={handleExportPagesCSV}>
-              <Download className="h-3 w-3" /> Pages (CSV)
-            </Button>
-            <Button variant="secondary" size="sm" onClick={handleExportHighlightsCSV}>
-              <Download className="h-3 w-3" /> Highlights (CSV)
+            <Button variant="secondary" size="sm" onClick={() => setShowImportModal(true)}>
+              <Upload className="h-3 w-3" /> Import
             </Button>
           </div>
         </Card>
+
+        <ExportModal
+          isOpen={showExportModal}
+          onClose={() => setShowExportModal(false)}
+        />
+
+        <ImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onImportComplete={handleImportComplete}
+        />
 
         {/* Danger Zone */}
         <Card className="border-error/20">

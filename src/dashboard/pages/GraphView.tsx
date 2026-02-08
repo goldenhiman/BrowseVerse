@@ -652,7 +652,7 @@ Provide a concise 2-3 sentence summary of what this node represents in the user'
           {/* Right Panel */}
           {panelOpen && nodeDetail && (
             <div className="w-[360px] shrink-0 animate-slide-in-right" style={{ zIndex: 'var(--z-panel)' }}>
-              <Card className="sticky top-6 max-h-[calc(100vh-180px)] overflow-y-auto">
+              <Card className="sticky top-16 max-h-[calc(100vh-180px)] overflow-y-auto">
                 {/* Panel header */}
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-2.5 min-w-0">

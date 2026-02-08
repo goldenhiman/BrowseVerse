@@ -86,7 +86,7 @@ export default function Timeline() {
           <div className="space-y-8">
             {Array.from(groupedPages.entries()).map(([dateStr, dayPages]) => (
               <div key={dateStr}>
-                <div className="sticky top-0 z-10 bg-surface-50 py-2">
+                <div className="sticky top-14 z-[9] bg-surface-50 py-2">
                   <h2 className="text-xs font-semibold text-surface-500 uppercase tracking-wider">
                     {formatDate(dayPages[0].last_seen_at)}
                     <Badge className="ml-2">{dayPages.length} pages</Badge>

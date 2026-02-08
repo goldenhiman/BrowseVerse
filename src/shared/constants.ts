@@ -53,3 +53,9 @@ export const AI_PAGE_SUMMARY_BATCH_SIZE = 10;
 
 /** Storage key for AI processor last-run timestamp */
 export const AI_LAST_RUN_KEY = 'bko_ai_last_run';
+
+/** Storage key for last auto-backup timestamp */
+export const LAST_AUTO_BACKUP_KEY = 'bko_last_auto_backup';
+
+/** Chrome alarm name for daily backup */
+export const AUTO_BACKUP_ALARM_NAME = 'bko_auto_backup';

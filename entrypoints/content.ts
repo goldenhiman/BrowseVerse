@@ -9,8 +9,8 @@ export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_idle',
   main() {
-    // Extract and send page metadata to background
-    extractAndSendMetadata();
+    // Extract and send page metadata to background (async, skips when paused)
+    void extractAndSendMetadata();
 
     // Set up highlight/text selection capture
     setupHighlightCapture();

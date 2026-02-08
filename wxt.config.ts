@@ -9,7 +9,7 @@ export default defineConfig({
     name: 'BrowseVerse - Browsing Knowledge OS',
     description: 'A local-first personal knowledge system for your browsing',
     version: '0.1.0',
-    permissions: ['tabs', 'activeTab', 'storage', 'idle', 'webNavigation'],
+    permissions: ['tabs', 'activeTab', 'storage', 'idle', 'webNavigation', 'alarms'],
     host_permissions: ['<all_urls>'],
     icons: {
       128: 'assets/icon.svg',

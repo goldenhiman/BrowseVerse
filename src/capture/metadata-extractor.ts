@@ -4,6 +4,7 @@
 
 import type { PageMetadata } from '../shared/types';
 import type { MetadataExtractedMessage } from '../shared/messaging';
+import { SETTINGS_STORAGE_KEY } from '../shared/constants';
 
 function getMetaContent(attr: string, value: string): string {
   const el = document.querySelector(`meta[${attr}="${value}"]`);
@@ -42,7 +43,11 @@ function getFavicon(): string {
   return `${window.location.origin}/favicon.ico`;
 }
 
-export function extractAndSendMetadata(): void {
+export async function extractAndSendMetadata(): Promise<void> {
+  const result = await browser.storage.local.get(SETTINGS_STORAGE_KEY);
+  const paused = (result[SETTINGS_STORAGE_KEY] as { extension_paused?: boolean } | undefined)?.extension_paused ?? false;
+  if (paused) return;
+
   const metadata = extractMetadata();
   const message: MetadataExtractedMessage = {
     type: 'METADATA_EXTRACTED',

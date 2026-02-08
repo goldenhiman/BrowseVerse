@@ -20,6 +20,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@radix-ui/react-switch": "^1.2.6",
     "@wxt-dev/module-react": "^1.1.5",
     "@xyflow/react": "^12.10.0",
     "clsx": "^2.1.1",

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Brain, Globe, Clock, ExternalLink, Layers, Activity } from 'lucide-react';
+import { Brain, Globe, Clock, ExternalLink, Activity, Pause, Play } from 'lucide-react';
 import type { StatsResponse } from '../../src/shared/messaging';
 
 function formatDuration(ms: number): string {
@@ -12,6 +12,7 @@ function formatDuration(ms: number): string {
 export default function App() {
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     browser.runtime
@@ -21,6 +22,10 @@ export default function App() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+    browser.runtime
+      .sendMessage({ type: 'GET_PAUSED' })
+      .then((r) => setPaused((r as { paused: boolean })?.paused ?? false))
+      .catch(() => {});
   }, []);
 
   const openDashboard = () => {
@@ -28,18 +33,50 @@ export default function App() {
     window.close();
   };
 
+  const togglePause = () => {
+    const next = !paused;
+    setPaused(next);
+    browser.runtime.sendMessage({ type: 'SET_PAUSED', payload: { paused: next } });
+  };
+
   return (
     <div className="w-80 bg-white">
+      {/* Paused banner */}
+      {paused && (
+        <div className="flex items-center justify-between gap-2 bg-amber-50 border-b border-amber-200 px-4 py-2.5">
+          <span className="flex items-center gap-2 text-amber-800 text-xs font-medium">
+            <Pause className="h-3.5 w-3.5 shrink-0" />
+            Collection paused
+          </span>
+          <button
+            onClick={togglePause}
+            className="flex items-center gap-1 rounded-md bg-amber-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-amber-700 transition-colors"
+          >
+            <Play className="h-3 w-3" />
+            Resume
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-gray-100 px-4 py-3">
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600">
           <Brain className="h-3.5 w-3.5 text-white" />
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <h1 className="text-sm font-semibold text-gray-900">BrowseVerse</h1>
           <p className="text-[10px] text-gray-400">Personal knowledge system</p>
         </div>
-        {stats?.active_session && (
+        {!paused && (
+          <button
+            onClick={togglePause}
+            className="shrink-0 rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+            title="Pause collection"
+          >
+            <Pause className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {!paused && stats?.active_session && (
           <span className="flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-600">
             <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
             Active

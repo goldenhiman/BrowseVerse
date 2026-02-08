@@ -1,38 +1,22 @@
-import React, { Suspense, lazy } from 'react';
+import React from 'react';
 import { createHashRouter } from 'react-router-dom';
 import { Shell } from './components/layout/Shell';
-import { Loader2 } from 'lucide-react';
+import Overview from './pages/Overview';
+import Timeline from './pages/Timeline';
+import CategoryExplorer from './pages/CategoryExplorer';
+import Constellations from './pages/Constellations';
+import ConstellationDetail from './pages/ConstellationDetail';
+import Nebulas from './pages/Nebulas';
+import NebulaEditor from './pages/NebulaEditor';
+import NebulaRunner from './pages/NebulaRunner';
+import GraphView from './pages/GraphView';
+import Settings from './pages/Settings';
 
-// Lazy-loaded pages — each becomes its own chunk so the initial
-// dashboard bundle stays small and heavy deps (ReactFlow, force-graph,
-// recharts) are only fetched when the user navigates to them.
-const Overview = lazy(() => import('./pages/Overview'));
-const Timeline = lazy(() => import('./pages/Timeline'));
-const CategoryExplorer = lazy(() => import('./pages/CategoryExplorer'));
-const Constellations = lazy(() => import('./pages/Constellations'));
-const ConstellationDetail = lazy(() => import('./pages/ConstellationDetail'));
-const Nebulas = lazy(() => import('./pages/Nebulas'));
-const NebulaEditor = lazy(() => import('./pages/NebulaEditor'));
-const NebulaRunner = lazy(() => import('./pages/NebulaRunner'));
-const GraphView = lazy(() => import('./pages/GraphView'));
-const Settings = lazy(() => import('./pages/Settings'));
-
-/** Lightweight spinner shown while a page chunk loads */
-function PageLoader() {
-  return (
-    <div className="flex items-center justify-center h-64">
-      <Loader2 className="h-5 w-5 text-surface-300 animate-spin" />
-    </div>
-  );
-}
-
-/** Wrap a lazy page component with Shell + Suspense */
-function page(Component: React.LazyExoticComponent<React.ComponentType>) {
+/** Wrap a page component with the Shell layout */
+function page(Component: React.ComponentType) {
   return (
     <Shell>
-      <Suspense fallback={<PageLoader />}>
-        <Component />
-      </Suspense>
+      <Component />
     </Shell>
   );
 }
