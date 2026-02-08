@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from '../components/layout/Header';
 import { Card, CardHeader, CardTitle } from '../components/shared/Card';
 import { Button } from '../components/shared/Button';
@@ -16,13 +16,17 @@ import {
   exportPagesAsCSV,
   exportHighlightsAsCSV,
   downloadFile,
+  validateExportFile,
+  importFromJSON,
 } from '../../privacy/export';
+import type { ImportPreview } from '../../privacy/export';
 import { testAIConnection, testProviderConfig, clearAICache } from '../../ai/manager';
 import type { AppSettings, AIProviderType, AIProviderConfig } from '../../shared/types';
 import { AI_PROVIDER_MODELS } from '../../shared/types';
 import {
   Shield,
   Download,
+  Upload,
   Trash2,
   Key,
   Palette,
@@ -36,7 +40,24 @@ import {
   ChevronUp,
   Plus,
   X,
+  CheckCircle2,
 } from 'lucide-react';
+
+/** Human-friendly labels for export table keys */
+const TABLE_LABELS: Record<string, string> = {
+  pages: 'Pages',
+  sessions: 'Sessions',
+  highlights: 'Highlights',
+  topics: 'Topics',
+  categories: 'Categories',
+  concepts: 'Concepts',
+  relationships: 'Relationships',
+  knowledgeBoxes: 'Constellations',
+  documentChunks: 'Document Chunks',
+  nebulas: 'Nebulas',
+  nebulaRuns: 'Nebula Runs',
+  artifacts: 'Artifacts',
+};
 
 export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -48,6 +69,14 @@ export default function Settings() {
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'checking' | 'connected' | 'disconnected'>('idle');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [testingProviderIndex, setTestingProviderIndex] = useState<number | null>(null);
+
+  // Import state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importFileContent, setImportFileContent] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importSuccess, setImportSuccess] = useState<Record<string, number> | null>(null);
 
   useEffect(() => {
     loadSettings().then((s) => setSettings(s));
@@ -100,6 +129,57 @@ export default function Settings() {
   const handleExportHighlightsCSV = async () => {
     const csv = await exportHighlightsAsCSV();
     downloadFile(csv, `knowledge-os-highlights-${Date.now()}.csv`, 'text/csv');
+  };
+
+  const handleImportFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset previous state
+    setImportError(null);
+    setImportSuccess(null);
+    setImportPreview(null);
+    setImportFileContent(null);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result as string;
+      const result = validateExportFile(text);
+      if (!result.valid) {
+        setImportError(result.error ?? 'Invalid export file.');
+      } else {
+        setImportPreview(result.preview!);
+        setImportFileContent(text);
+      }
+    };
+    reader.onerror = () => setImportError('Failed to read the selected file.');
+    reader.readAsText(file);
+    // Reset input so re-selecting the same file triggers onChange
+    e.target.value = '';
+  };
+
+  const handleImportConfirm = async () => {
+    if (!importFileContent) return;
+    setImporting(true);
+    setImportError(null);
+    const result = await importFromJSON(importFileContent);
+    setImporting(false);
+    if (result.success) {
+      setImportSuccess(result.counts);
+      setImportPreview(null);
+      setImportFileContent(null);
+      // Reload settings from the imported data
+      const freshSettings = await loadSettings();
+      setSettings(freshSettings);
+    } else {
+      setImportError(result.error ?? 'Import failed.');
+    }
+  };
+
+  const handleImportCancel = () => {
+    setImportPreview(null);
+    setImportFileContent(null);
+    setImportError(null);
+    setImportSuccess(null);
   };
 
   const handleDeleteAll = async () => {
@@ -194,10 +274,10 @@ export default function Settings() {
   }
 
   return (
-    <div>
+    <div className="m-auto">
       <Header title="Settings" subtitle="Privacy, data, and preferences" />
 
-      <div className="p-6 max-w-3xl space-y-6">
+      <div className="p-6 max-w-3xl space-y-6 m-auto">
         {/* Domain Exclusions */}
         <Card>
           <CardHeader>
@@ -579,20 +659,23 @@ export default function Settings() {
           </div>
         </Card>
 
-        {/* Export */}
+        {/* Export & Import */}
         <Card>
           <CardHeader>
             <CardTitle>
               <span className="flex items-center gap-2">
                 <Download className="h-4 w-4 text-blue-500" />
-                Export Data
+                Export &amp; Import Data
               </span>
             </CardTitle>
           </CardHeader>
           <p className="text-xs text-surface-500 mb-3">
-            Export your data in various formats. Your data is always yours.
+            Export your data in various formats, or import a previous backup to restore everything.
+            Your data is always yours.
           </p>
-          <div className="flex flex-wrap gap-2">
+
+          {/* Export buttons */}
+          <div className="flex flex-wrap gap-2 mb-4">
             <Button variant="secondary" size="sm" onClick={handleExportJSON}>
               <Download className="h-3 w-3" /> Export All (JSON)
             </Button>
@@ -602,6 +685,134 @@ export default function Settings() {
             <Button variant="secondary" size="sm" onClick={handleExportHighlightsCSV}>
               <Download className="h-3 w-3" /> Highlights (CSV)
             </Button>
+          </div>
+
+          {/* Import section */}
+          <div className="border-t border-surface-200 pt-4">
+            <p className="text-xs font-medium text-surface-600 mb-2">Import</p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleImportFileSelect}
+            />
+
+            {!importPreview && !importSuccess && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="h-3 w-3" /> Import Data (JSON)
+              </Button>
+            )}
+
+            {/* Validation error */}
+            {importError && !importPreview && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 shadow-[0_0_0_1px_rgba(220,38,38,0.15)] px-3 py-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-xs text-red-700">{importError}</p>
+                  <button
+                    type="button"
+                    onClick={handleImportCancel}
+                    className="text-xs text-red-600 font-medium hover:text-red-800 mt-1"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Import preview / confirmation */}
+            {importPreview && (
+              <div className="mt-3 rounded-lg border border-surface-200 bg-surface-50/50 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-surface-700">Import Preview</p>
+                  <Badge className="bg-blue-50 text-blue-700 text-[10px]">
+                    v{importPreview.version}
+                  </Badge>
+                </div>
+
+                <p className="text-xs text-surface-500">
+                  Exported on{' '}
+                  <strong>{new Date(importPreview.exported_at).toLocaleString()}</strong>
+                  {importPreview.hasSettings && ' — includes settings'}
+                </p>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                  {Object.entries(importPreview.counts)
+                    .filter(([, count]) => count > 0)
+                    .map(([key, count]) => (
+                      <div key={key} className="flex items-center justify-between text-xs">
+                        <span className="text-surface-600">{TABLE_LABELS[key] ?? key}</span>
+                        <span className="font-medium text-surface-800">{count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                </div>
+
+                <div className="flex items-start gap-2 rounded-lg bg-amber-50 shadow-[0_0_0_1px_rgba(217,119,6,0.15)] px-3 py-2">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-800">
+                    This will <strong>replace all existing data</strong>. Make sure you have a backup
+                    if needed.
+                  </p>
+                </div>
+
+                {importError && (
+                  <div className="flex items-start gap-2 rounded-lg bg-red-50 shadow-[0_0_0_1px_rgba(220,38,38,0.15)] px-3 py-2">
+                    <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
+                    <p className="text-xs text-red-700">{importError}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleImportConfirm}
+                    disabled={importing}
+                  >
+                    {importing ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Upload className="h-3 w-3" />
+                    )}
+                    {importing ? 'Importing...' : 'Import & Replace All Data'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleImportCancel} disabled={importing}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Import success */}
+            {importSuccess && (
+              <div className="mt-3 rounded-lg border border-green-200 bg-green-50/50 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <p className="text-sm font-medium text-green-800">Import Successful</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                  {Object.entries(importSuccess)
+                    .filter(([, count]) => count > 0)
+                    .map(([key, count]) => (
+                      <div key={key} className="flex items-center justify-between text-xs">
+                        <span className="text-green-700">{TABLE_LABELS[key] ?? key}</span>
+                        <span className="font-medium text-green-900">{count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                </div>
+
+                <Button variant="ghost" size="sm" onClick={handleImportCancel}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
           </div>
         </Card>
 
