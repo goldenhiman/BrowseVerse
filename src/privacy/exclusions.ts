@@ -164,6 +164,19 @@ export function invalidateCache(): void {
   cachedSettings = null;
 }
 
+/** Check if extension collection is paused */
+export async function isPaused(): Promise<boolean> {
+  const settings = await getSettings();
+  return !!settings.extension_paused;
+}
+
+/** Set extension pause state */
+export async function setPaused(paused: boolean): Promise<void> {
+  const settings = await getSettings();
+  if (settings.extension_paused === paused) return;
+  await saveSettings({ ...settings, extension_paused: paused });
+}
+
 // Listen for settings changes from other contexts
 if (typeof browser !== 'undefined' && browser.storage?.onChanged) {
   browser.storage.onChanged.addListener((changes, area) => {

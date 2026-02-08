@@ -3,7 +3,7 @@
 // ============================================================
 
 import type { HighlightCapturedMessage } from '../shared/messaging';
-import { HIGHLIGHT_CONTEXT_CHARS } from '../shared/constants';
+import { HIGHLIGHT_CONTEXT_CHARS, SETTINGS_STORAGE_KEY } from '../shared/constants';
 
 function getSelectionContext(
   selection: Selection,
@@ -39,9 +39,13 @@ export function setupHighlightCapture(): void {
   document.addEventListener('mouseup', () => {
     if (debounceTimer) clearTimeout(debounceTimer);
 
-    debounceTimer = setTimeout(() => {
+    debounceTimer = setTimeout(async () => {
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed) return;
+
+      const result = await browser.storage.local.get(SETTINGS_STORAGE_KEY);
+      const paused = (result[SETTINGS_STORAGE_KEY] as { extension_paused?: boolean } | undefined)?.extension_paused ?? false;
+      if (paused) return;
 
       const context = getSelectionContext(selection);
       if (!context) return;

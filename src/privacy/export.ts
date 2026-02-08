@@ -6,7 +6,9 @@ import { db } from '../db/index';
 import {
   SETTINGS_STORAGE_KEY,
   AI_LAST_RUN_KEY,
+  LAST_AUTO_BACKUP_KEY,
 } from '../shared/constants';
+import { isEncryptedExport } from './crypto';
 import { invalidateCache } from './exclusions';
 import type {
   Page,
@@ -51,10 +53,11 @@ export interface ExportData {
     settings?: AppSettings;
     exclusionsPresetsVersion?: number;
     aiLastRun?: number;
+    lastAutoBackup?: number;
   };
 }
 
-export const EXPORT_VERSION = '2.0';
+export const EXPORT_VERSION = '2.1';
 
 // ============================================================
 // Validation
@@ -71,6 +74,7 @@ export interface ImportPreview {
   exported_at: string;
   counts: Record<string, number>;
   hasSettings: boolean;
+  encrypted: boolean;
 }
 
 const TABLE_KEYS: (keyof ExportData)[] = [
@@ -88,8 +92,23 @@ const TABLE_KEYS: (keyof ExportData)[] = [
   'artifacts',
 ];
 
-/** Validate an export file and return a preview of what it contains */
+/**
+ * Validate an export file and return a preview of what it contains.
+ *
+ * If the file is encrypted, returns `valid: false` with `error` set to
+ * `'ENCRYPTED'` — the caller should prompt for a password, decrypt,
+ * then re-validate the plaintext result.
+ */
 export function validateExportFile(jsonString: string): ValidationResult {
+  // Detect encrypted files before full parsing
+  if (isEncryptedExport(jsonString)) {
+    return {
+      valid: false,
+      error: 'ENCRYPTED',
+      preview: { version: '', exported_at: '', counts: {}, hasSettings: false, encrypted: true },
+    };
+  }
+
   let data: Record<string, unknown>;
   try {
     data = JSON.parse(jsonString);
@@ -109,7 +128,7 @@ export function validateExportFile(jsonString: string): ValidationResult {
     return { valid: false, error: 'Missing or invalid "exported_at" field.' };
   }
 
-  // v1.0 exports have a subset of tables; v2.0 has all. Both are accepted.
+  // v1.0 exports have a subset of tables; v2.0+ has all. Both are accepted.
   const v1RequiredTables = ['pages', 'sessions', 'highlights', 'topics', 'categories', 'concepts', 'relationships', 'knowledgeBoxes'];
   for (const key of v1RequiredTables) {
     if (!Array.isArray(data[key])) {
@@ -133,6 +152,7 @@ export function validateExportFile(jsonString: string): ValidationResult {
       exported_at: data.exported_at as string,
       counts,
       hasSettings,
+      encrypted: false,
     },
   };
 }
@@ -204,6 +224,9 @@ export async function importFromJSON(jsonString: string): Promise<ImportResult> 
       if (typeof browserStorage.aiLastRun === 'number') {
         await browser.storage.local.set({ [AI_LAST_RUN_KEY]: browserStorage.aiLastRun });
       }
+      if (typeof browserStorage.lastAutoBackup === 'number') {
+        await browser.storage.local.set({ [LAST_AUTO_BACKUP_KEY]: browserStorage.lastAutoBackup });
+      }
     }
 
     // Invalidate cached settings so subsequent reads pick up imported values
@@ -227,6 +250,7 @@ export async function exportAsJSON(): Promise<string> {
     SETTINGS_STORAGE_KEY,
     PRESETS_VERSION_KEY,
     AI_LAST_RUN_KEY,
+    LAST_AUTO_BACKUP_KEY,
   ]);
 
   const data: ExportData = {
@@ -250,6 +274,7 @@ export async function exportAsJSON(): Promise<string> {
       settings: storageResult[SETTINGS_STORAGE_KEY] ?? undefined,
       exclusionsPresetsVersion: storageResult[PRESETS_VERSION_KEY] ?? undefined,
       aiLastRun: storageResult[AI_LAST_RUN_KEY] ?? undefined,
+      lastAutoBackup: storageResult[LAST_AUTO_BACKUP_KEY] ?? undefined,
     },
   };
 

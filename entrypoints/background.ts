@@ -7,14 +7,15 @@ import { setupSessionDetector, recordPageInSession, getCurrentSessionId } from '
 import { pagesRepo } from '../src/db/repositories/pages';
 import { highlightsRepo } from '../src/db/repositories/highlights';
 import { sessionsRepo } from '../src/db/repositories/sessions';
-import { addExcludedDomain, loadSettings } from '../src/privacy/exclusions';
+import { addExcludedDomain, loadSettings, isPaused, setPaused } from '../src/privacy/exclusions';
 import { runTopicInference } from '../src/engine/topic-inference';
 import { buildCategories } from '../src/engine/category-builder';
 import { runRelationshipMapping } from '../src/engine/relationship-mapper';
 import { extractConcepts } from '../src/engine/concept-extractor';
 import { runAIProcessor } from '../src/ai/processor';
+import { runAutoBackup } from '../src/privacy/auto-backup';
 import type { ContentMessage, UIMessage, StatsResponse } from '../src/shared/messaging';
-import { DASHBOARD_PATH, ENGINE_PROCESSING_INTERVAL_MS, AI_PROCESSING_INTERVAL_MS } from '../src/shared/constants';
+import { DASHBOARD_PATH, ENGINE_PROCESSING_INTERVAL_MS, AI_PROCESSING_INTERVAL_MS, AUTO_BACKUP_ALARM_NAME } from '../src/shared/constants';
 
 export default defineBackground(() => {
   console.log('[BKO] Background service worker starting...');
@@ -54,6 +55,22 @@ export default defineBackground(() => {
   setTimeout(runAIProcessor, 60000); // First AI run after 60s
   setInterval(runAIProcessor, AI_PROCESSING_INTERVAL_MS);
 
+  // Register daily auto-backup alarm (persists across service worker restarts)
+  browser.alarms.create(AUTO_BACKUP_ALARM_NAME, {
+    delayInMinutes: 1, // first check 1 min after startup
+    periodInMinutes: 24 * 60, // then every 24 hours
+  });
+
+  browser.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === AUTO_BACKUP_ALARM_NAME) {
+      try {
+        await runAutoBackup();
+      } catch (err) {
+        console.error('[BKO] Auto-backup error:', err);
+      }
+    }
+  });
+
   console.log('[BKO] Background service worker ready');
 });
 
@@ -63,6 +80,7 @@ async function handleMessage(
 ): Promise<unknown> {
   switch (message.type) {
     case 'METADATA_EXTRACTED': {
+      if (await isPaused()) return { success: true };
       const { url, title, favicon, metadata } = message.payload;
       await pagesRepo.upsert(url, { title, favicon, metadata });
 
@@ -75,6 +93,7 @@ async function handleMessage(
     }
 
     case 'HIGHLIGHT_CAPTURED': {
+      if (await isPaused()) return { success: true };
       const { url, text, context_before, context_after } = message.payload;
       // Find the page ID for this URL
       const pages = await pagesRepo.search(url, 1);
@@ -124,6 +143,15 @@ async function handleMessage(
 
     case 'DELETE_PAGE': {
       await pagesRepo.deletePage(message.payload.pageId);
+      return { success: true };
+    }
+
+    case 'GET_PAUSED': {
+      return { paused: await isPaused() };
+    }
+
+    case 'SET_PAUSED': {
+      await setPaused(message.payload.paused);
       return { success: true };
     }
 

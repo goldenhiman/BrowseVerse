@@ -1,4 +1,12 @@
+/* eslint-disable @typescript-eslint/no-unnecessary-condition */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+
+// File System Access API type augmentation (not yet in all TS libs)
+declare global {
+  interface Window {
+    showDirectoryPicker(options?: { mode?: 'read' | 'readwrite' }): Promise<FileSystemDirectoryHandle>;
+  }
+}
 import { Header } from '../components/layout/Header';
 import { Card, CardHeader, CardTitle } from '../components/shared/Card';
 import { Button } from '../components/shared/Button';
@@ -20,6 +28,13 @@ import {
   importFromJSON,
 } from '../../privacy/export';
 import type { ImportPreview } from '../../privacy/export';
+import { isEncryptedExport, encryptExport, decryptExport } from '../../privacy/crypto';
+import {
+  storeBackupDirHandle,
+  getBackupDirName,
+  clearBackupDirHandle,
+} from '../../privacy/auto-backup';
+import { LAST_AUTO_BACKUP_KEY } from '../../shared/constants';
 import { testAIConnection, testProviderConfig, clearAICache } from '../../ai/manager';
 import type { AppSettings, AIProviderType, AIProviderConfig } from '../../shared/types';
 import { AI_PROVIDER_MODELS } from '../../shared/types';
@@ -41,6 +56,11 @@ import {
   Plus,
   X,
   CheckCircle2,
+  FolderOpen,
+  HardDrive,
+  Clock,
+  ShieldCheck,
+  Pause,
 } from 'lucide-react';
 
 /** Human-friendly labels for export table keys */
@@ -78,8 +98,27 @@ export default function Settings() {
   const [importing, setImporting] = useState(false);
   const [importSuccess, setImportSuccess] = useState<Record<string, number> | null>(null);
 
+  // Encrypted import state
+  const [importNeedsPassword, setImportNeedsPassword] = useState(false);
+  const [importDecryptPassword, setImportDecryptPassword] = useState('');
+  const [decrypting, setDecrypting] = useState(false);
+
+  // Auto-backup state
+  const [backupDirName, setBackupDirName] = useState<string | null>(null);
+  const [lastAutoBackup, setLastAutoBackup] = useState<number | null>(null);
+  const [encPasswordInput, setEncPasswordInput] = useState('');
+
+  // Manual export encryption
+  const [encryptManualExport, setEncryptManualExport] = useState(true);
+
   useEffect(() => {
     loadSettings().then((s) => setSettings(s));
+    // Load backup directory name and last-backup timestamp
+    getBackupDirName().then(setBackupDirName);
+    browser.storage.local.get(LAST_AUTO_BACKUP_KEY).then((r) => {
+      const val = r[LAST_AUTO_BACKUP_KEY];
+      setLastAutoBackup(typeof val === 'number' ? val : null);
+    });
   }, []);
 
   // Auto-check connection when AI is enabled and has providers
@@ -117,8 +156,12 @@ export default function Settings() {
   };
 
   const handleExportJSON = async () => {
-    const json = await exportAsJSON();
-    downloadFile(json, `knowledge-os-export-${Date.now()}.json`, 'application/json');
+    let content = await exportAsJSON();
+    const password = settings?.backup_encryption_password;
+    if (password && encryptManualExport) {
+      content = await encryptExport(content, password);
+    }
+    downloadFile(content, `knowledge-os-export-${Date.now()}.json`, 'application/json');
   };
 
   const handleExportPagesCSV = async () => {
@@ -139,10 +182,18 @@ export default function Settings() {
     setImportSuccess(null);
     setImportPreview(null);
     setImportFileContent(null);
+    setImportNeedsPassword(false);
+    setImportDecryptPassword('');
 
     const reader = new FileReader();
     reader.onload = () => {
       const text = reader.result as string;
+      // Check if the file is encrypted before validating
+      if (isEncryptedExport(text)) {
+        setImportFileContent(text);
+        setImportNeedsPassword(true);
+        return;
+      }
       const result = validateExportFile(text);
       if (!result.valid) {
         setImportError(result.error ?? 'Invalid export file.');
@@ -155,6 +206,26 @@ export default function Settings() {
     reader.readAsText(file);
     // Reset input so re-selecting the same file triggers onChange
     e.target.value = '';
+  };
+
+  const handleDecryptAndValidate = async () => {
+    if (!importFileContent || !importDecryptPassword) return;
+    setDecrypting(true);
+    setImportError(null);
+    try {
+      const plaintext = await decryptExport(importFileContent, importDecryptPassword);
+      const result = validateExportFile(plaintext);
+      if (!result.valid) {
+        setImportError(result.error ?? 'Decrypted file is not a valid export.');
+      } else {
+        setImportPreview(result.preview!);
+        setImportFileContent(plaintext); // replace with decrypted content
+        setImportNeedsPassword(false);
+      }
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Decryption failed.');
+    }
+    setDecrypting(false);
   };
 
   const handleImportConfirm = async () => {
@@ -180,6 +251,32 @@ export default function Settings() {
     setImportFileContent(null);
     setImportError(null);
     setImportSuccess(null);
+    setImportNeedsPassword(false);
+    setImportDecryptPassword('');
+  };
+
+  const handleChooseBackupFolder = async () => {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await storeBackupDirHandle(handle);
+      setBackupDirName(handle.name);
+    } catch {
+      // User cancelled the picker — do nothing
+    }
+  };
+
+  const handleClearBackupFolder = async () => {
+    await clearBackupDirHandle();
+    setBackupDirName(null);
+  };
+
+  const handleSetEncryptionPassword = async () => {
+    if (!encPasswordInput.trim()) {
+      await updateSetting('backup_encryption_password', undefined);
+    } else {
+      await updateSetting('backup_encryption_password', encPasswordInput.trim());
+    }
+    setEncPasswordInput('');
   };
 
   const handleDeleteAll = async () => {
@@ -278,6 +375,32 @@ export default function Settings() {
       <Header title="Settings" subtitle="Privacy, data, and preferences" />
 
       <div className="p-6 max-w-3xl space-y-6 m-auto">
+        {/* Pause collection */}
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <span className="flex items-center gap-2">
+                <Pause className="h-4 w-4 text-amber-500" />
+                Pause Collection
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <p className="text-xs text-surface-500 mb-3">
+            When paused, BrowseVerse stops capturing pages, highlights, and metadata from your browsing. You can resume at any time from here or the extension popup.
+          </p>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!settings.extension_paused}
+              onChange={(e) => updateSetting('extension_paused', e.target.checked)}
+              className="rounded border-surface-300 h-4 w-4"
+            />
+            <span className="text-sm text-surface-700">
+              {settings.extension_paused ? 'Collection paused' : 'Collection active'}
+            </span>
+          </label>
+        </Card>
+
         {/* Domain Exclusions */}
         <Card>
           <CardHeader>
@@ -659,6 +782,138 @@ export default function Settings() {
           </div>
         </Card>
 
+        {/* Auto-Backup & Encryption */}
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <span className="flex items-center gap-2">
+                <HardDrive className="h-4 w-4 text-emerald-500" />
+                Auto-Backup &amp; Encryption
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <p className="text-xs text-surface-500 mb-3">
+            Automatically save a daily backup to a folder on your computer. Set an encryption
+            password to protect all exports (manual and automatic).
+          </p>
+
+          <div className="space-y-4">
+            {/* Enable toggle */}
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!!settings.auto_backup_enabled}
+                onChange={(e) => updateSetting('auto_backup_enabled', e.target.checked)}
+                className="rounded border-surface-300 h-4 w-4"
+              />
+              <span className="text-sm text-surface-700">Enable daily auto-backup</span>
+            </label>
+
+            {/* Backup folder */}
+            <div>
+              <label className="text-xs font-medium text-surface-600 mb-1.5 block">
+                Backup Folder
+              </label>
+              {backupDirName ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 rounded-lg bg-surface-50 border border-surface-200 px-3 py-1.5">
+                    <FolderOpen className="h-3.5 w-3.5 text-surface-500" />
+                    <span className="text-sm text-surface-700">{backupDirName}</span>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={handleChooseBackupFolder}>
+                    Change
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleClearBackupFolder}>
+                    <X className="h-3 w-3" /> Remove
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="secondary" size="sm" onClick={handleChooseBackupFolder}>
+                  <FolderOpen className="h-3 w-3" /> Choose Folder
+                </Button>
+              )}
+            </div>
+
+            {/* Warning: auto-backup enabled but no folder */}
+            {settings.auto_backup_enabled && !backupDirName && (
+              <div className="flex items-start gap-2 rounded-lg bg-amber-50 shadow-[0_0_0_1px_rgba(217,119,6,0.15)] px-3 py-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-800">
+                  Auto-backup is enabled but no folder is selected. Choose a folder to start saving
+                  daily backups.
+                </p>
+              </div>
+            )}
+
+            {/* Last backup */}
+            <div className="flex items-center gap-2 text-xs text-surface-500">
+              <Clock className="h-3.5 w-3.5" />
+              <span>
+                Last auto-backup:{' '}
+                {lastAutoBackup ? (
+                  <strong className="text-surface-700">
+                    {new Date(lastAutoBackup).toLocaleString()}
+                  </strong>
+                ) : (
+                  'Never'
+                )}
+              </span>
+            </div>
+
+            {/* Encryption password */}
+            <div className="border-t border-surface-200 pt-4">
+              <div className="flex items-center gap-2 mb-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+                <label className="text-xs font-medium text-surface-600">
+                  Encryption Password
+                </label>
+              </div>
+              <p className="text-xs text-surface-500 mb-2">
+                Set a password to encrypt all exports. Both manual and automatic backups will be
+                encrypted. You will need this password to import encrypted files.
+              </p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSetEncryptionPassword();
+                }}
+                className="flex gap-2"
+              >
+                <Input
+                  type="password"
+                  placeholder={
+                    settings.backup_encryption_password
+                      ? 'Change encryption password\u2026'
+                      : 'Set encryption password\u2026'
+                  }
+                  value={encPasswordInput}
+                  onChange={(e) => setEncPasswordInput(e.target.value)}
+                  autoComplete="off"
+                  className="flex-1"
+                />
+                <Button type="submit" size="sm">
+                  {settings.backup_encryption_password ? 'Update' : 'Set'}
+                </Button>
+                {settings.backup_encryption_password && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => updateSetting('backup_encryption_password', undefined)}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </form>
+              {settings.backup_encryption_password && (
+                <p className="text-[10px] text-green-600 mt-1.5 flex items-center gap-1">
+                  <ShieldCheck className="h-3 w-3" /> Encryption active — all exports will be
+                  encrypted
+                </p>
+              )}
+            </div>
+          </div>
+        </Card>
+
         {/* Export & Import */}
         <Card>
           <CardHeader>
@@ -675,7 +930,7 @@ export default function Settings() {
           </p>
 
           {/* Export buttons */}
-          <div className="flex flex-wrap gap-2 mb-4">
+          <div className="flex flex-wrap gap-2 mb-2">
             <Button variant="secondary" size="sm" onClick={handleExportJSON}>
               <Download className="h-3 w-3" /> Export All (JSON)
             </Button>
@@ -686,6 +941,20 @@ export default function Settings() {
               <Download className="h-3 w-3" /> Highlights (CSV)
             </Button>
           </div>
+          {settings.backup_encryption_password && (
+            <label className="flex items-center gap-2 cursor-pointer select-none mb-4">
+              <input
+                type="checkbox"
+                checked={encryptManualExport}
+                onChange={(e) => setEncryptManualExport(e.target.checked)}
+                className="rounded border-surface-300 h-3.5 w-3.5"
+              />
+              <span className="text-xs text-surface-600">
+                Encrypt JSON export
+              </span>
+            </label>
+          )}
+          {!settings.backup_encryption_password && <div className="mb-4" />}
 
           {/* Import section */}
           <div className="border-t border-surface-200 pt-4">
@@ -699,7 +968,7 @@ export default function Settings() {
               onChange={handleImportFileSelect}
             />
 
-            {!importPreview && !importSuccess && (
+            {!importPreview && !importSuccess && !importNeedsPassword && (
               <Button
                 variant="secondary"
                 size="sm"
@@ -709,8 +978,54 @@ export default function Settings() {
               </Button>
             )}
 
+            {/* Encrypted file: password prompt */}
+            {importNeedsPassword && (
+              <div className="mt-3 rounded-lg border border-surface-200 bg-surface-50/50 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                  <p className="text-sm font-medium text-surface-700">Encrypted Export Detected</p>
+                </div>
+                <p className="text-xs text-surface-500">
+                  This file is encrypted. Enter the password that was used to encrypt it.
+                </p>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleDecryptAndValidate();
+                  }}
+                  className="flex gap-2"
+                >
+                  <Input
+                    type="password"
+                    placeholder="Encryption password\u2026"
+                    value={importDecryptPassword}
+                    onChange={(e) => setImportDecryptPassword(e.target.value)}
+                    autoComplete="off"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={decrypting || !importDecryptPassword.trim()}
+                  >
+                    {decrypting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Lock className="h-3 w-3" />}
+                    {decrypting ? 'Decrypting...' : 'Decrypt'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleImportCancel} disabled={decrypting}>
+                    Cancel
+                  </Button>
+                </form>
+                {importError && (
+                  <div className="flex items-start gap-2 rounded-lg bg-red-50 shadow-[0_0_0_1px_rgba(220,38,38,0.15)] px-3 py-2">
+                    <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
+                    <p className="text-xs text-red-700">{importError}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Validation error */}
-            {importError && !importPreview && (
+            {importError && !importPreview && !importNeedsPassword && (
               <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 shadow-[0_0_0_1px_rgba(220,38,38,0.15)] px-3 py-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
                 <div>

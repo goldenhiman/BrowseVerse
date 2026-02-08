@@ -43,7 +43,9 @@ export type UIMessage =
   | GetTimelineMessage
   | OpenDashboardMessage
   | ExcludeDomainMessage
-  | DeletePageMessage;
+  | DeletePageMessage
+  | GetPausedMessage
+  | SetPausedMessage;
 
 export interface GetStatsMessage {
   type: 'GET_STATS';
@@ -72,6 +74,15 @@ export interface ExcludeDomainMessage {
 export interface DeletePageMessage {
   type: 'DELETE_PAGE';
   payload: { pageId: number };
+}
+
+export interface GetPausedMessage {
+  type: 'GET_PAUSED';
+}
+
+export interface SetPausedMessage {
+  type: 'SET_PAUSED';
+  payload: { paused: boolean };
 }
 
 // Response types

@@ -3,7 +3,7 @@
 // ============================================================
 
 import { pagesRepo } from '../db/repositories/pages';
-import { isExcluded } from '../privacy/exclusions';
+import { isExcluded, isPaused } from '../privacy/exclusions';
 import { SYSTEM_EXCLUDED_PATTERNS, MIN_DWELL_TIME_MS } from '../shared/constants';
 
 interface ActiveTab {
@@ -31,6 +31,7 @@ async function finalizeActiveTab(): Promise<void> {
 
 async function trackPage(tabId: number, url: string, title: string): Promise<number | undefined> {
   if (isSystemUrl(url)) return undefined;
+  if (await isPaused()) return undefined;
 
   try {
     const excluded = await isExcluded(url);
